@@ -1,0 +1,10 @@
+llama-index-core>=0.12
+llama-index-vector-stores-chroma
+llama-index-embeddings-google-genai
+llama-index-llms-google-genai
+llama-index-readers-file
+docx2txt
+chromadb>=0.5
+rank-bm25
+chainlit>=2.0
+python-dotenv
