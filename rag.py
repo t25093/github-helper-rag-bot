@@ -43,12 +43,14 @@ ANSWER_PROMPT = """את/ה בוט שעונה על שאלות לפי מסמכי �
 3. ענה/י בעברית, בקצרה ובבהירות. אל תציין/תצייני שמות מסמכים או מספרי קטעים,
    ואל תפנה/תפני את המשתמש "לקובץ אחר" או "לתסריט" - המשתמש לא רואה את הקבצים. התעלם/י מהפניות כאלה בקטעים.
 4. פקודות (למשל git push) ושמות כפתורים מעתיקים בדיוק כמו שהם מופיעים בקטעים.
-   כל פקודה כותבים בשורה משלה בתוך בלוק קוד שמתחיל ב-```bash, בלי גרש הפוך (`) נוסף בתוך הבלוק.
-   אם בפקודות יש ערכים לדוגמה שצריך להחליף (למשל USER, REPO, my-project, feature-login, "השם שלך"),
-   כתוב/כתבי זאת פעם אחת בלבד, במשפט קצר אחרי הצעדים, ולא הערה ליד כל פקודה.
+   פקודות שמריצים ברצף כותבים יחד בבלוק קוד אחד שמתחיל ב-```bash, פקודה בכל שורה - ולא בלוק נפרד לכל פקודה.
+   בלי גרש הפוך (`) נוסף בתוך הבלוק.
+   אם בפקודות שבתשובה הזו יש ערכים לדוגמה שצריך להחליף (למשל USER, REPO, my-project, feature-login, "השם שלך"),
+   כתוב/כתבי זאת פעם אחת בלבד, במשפט קצר בסוף. אם אין בתשובה פקודות עם ערכים כאלה - אל תכתוב/תכתבי משפט כזה.
    main ו-origin הם שמות רגילים ולא דוגמאות - אין להעיר עליהם.
    אסור להמציא פקודה או אפשרות שלא מופיעה בקטעים.
-5. אם יש בקטעים צעדים לפי סדר, הצג/הציגי אותם כרשימה ממוספרת.
+5. אם יש בקטעים צעדים לפי סדר, הצג/הציגי אותם כרשימה ממוספרת, עם כל השלבים שמופיעים בקטעים
+   ובסדר שלהם - בלי לדלג על שלבים באמצע. אם בקטעים יש גם סיכום של כל הפקודות, אפשר להשתמש בו.
 6. השיחה הקודמת נועדה רק כדי להבין למה המשתמש מתכוון. את המידע עצמו לוקחים רק מהקטעים.
    בשאלת המשך, אל תחזור/תחזרי על שלבים שכבר הוסברו בשיחה. המשך/המשיכי מהמקום שבו המשתמש נמצא.
 
@@ -87,6 +89,35 @@ class OrgBot:
         data = self.collection.get(include=["documents", "metadatas"])
         self.docs = {i: (d, m or {}) for i, d, m in zip(data["ids"], data["documents"], data["metadatas"])}
         self.bm25 = HebrewBM25(list(self.docs), [d for d, _ in self.docs.values()])
+
+        # מפה ממיקום הקטע בקובץ למזהה שלו - לצורך הבאת הקטעים השכנים
+        self.position = {}
+        for doc_id, (_, meta) in self.docs.items():
+            if meta.get("chunk_index") is not None:
+                self.position[(meta.get("file_name"), int(meta["chunk_index"]))] = doc_id
+        if not self.position and config.NEIGHBORS > 0:
+            print("שימי לב: האינדקס נבנה בגרסה ישנה. הריצי שוב python ingest.py כדי להפעיל הבאת קטעים שכנים.")
+
+    def with_neighbors(self, hits):
+        """מוסיף לכל קטע שנמצא את הקטעים שלפניו ואחריו באותו קובץ, ומסדר הכל לפי הסדר בקובץ."""
+        if config.NEIGHBORS <= 0 or not self.position:
+            return hits
+        ids = []
+        for doc_id, _, meta in hits:
+            idx = meta.get("chunk_index")
+            if idx is None:
+                ids.append(doc_id)
+                continue
+            for d in range(-config.NEIGHBORS, config.NEIGHBORS + 1):
+                j = self.position.get((meta.get("file_name"), int(idx) + d))
+                if j and j not in ids:
+                    ids.append(j)
+        # קבצים לפי סדר הרלוונטיות, ובתוך כל קובץ - לפי סדר הסעיפים
+        file_rank = {}
+        for j in ids:
+            file_rank.setdefault(self.docs[j][1].get("file_name"), len(file_rank))
+        ids.sort(key=lambda j: (file_rank[self.docs[j][1].get("file_name")], int(self.docs[j][1].get("chunk_index", 0))))
+        return [(j, *self.docs[j]) for j in ids]
 
     @staticmethod
     def format_history(history) -> str:
@@ -137,6 +168,7 @@ class OrgBot:
             return Answer(config.UNCLEAR, question, False)
         # מחפשים עם השאלה המקורית וגם עם המורחבת, כדי שהרחבה לא מוצלחת לא תאבד את המילים של המשתמש
         hits = self.hybrid_search(f"{question}\n{search_query}" if expanded else question)
+        hits = self.with_neighbors(hits)
 
         # הדפסה לטרמינל (לא לצ'אט) - כדי לראות למה הבוט ענה כמו שענה
         print(f"\n[שאלה] {question}\n[חיפוש] {search_query}")

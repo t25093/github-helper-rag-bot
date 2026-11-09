@@ -36,7 +36,7 @@ def load_documents():
     return docs
 
 
-FRONT_MATTER_RE = re.compile(r"\A﻿?---\s*\n(.*?)\n---\s*\n", re.S)
+FRONT_MATTER_RE = re.compile(r"\A\s*﻿?---\s*\n(.*?)\n---\s*\n", re.S)
 
 
 def strip_front_matter(doc):
@@ -101,12 +101,30 @@ def split_documents(documents):
             title = header_path(node)
             for part in fallback.split_text(node.get_content()):
                 text = part if not title or part.startswith("#") else f"[{title}]\n{part}"
-                final.append(TextNode(text=text, metadata=dict(node.metadata)))
+                final.append(TextNode(
+                    text=text,
+                    metadata=dict(node.metadata),
+                    excluded_embed_metadata_keys=list(node.excluded_embed_metadata_keys),
+                    excluded_llm_metadata_keys=list(node.excluded_llm_metadata_keys),
+                ))
         else:
             final.append(node)
 
     final.extend(fallback.get_nodes_from_documents(other_docs))
+    add_positions(final)
     return final
+
+
+def add_positions(nodes):
+    """שומר לכל קטע את המיקום שלו בקובץ (0, 1, 2...), כדי שבזמן החיפוש אפשר יהיה
+    להביא גם את הקטעים שלפניו ואחריו - למשל את השלב הקודם והשלב הבא בתהליך."""
+    counters = {}
+    for node in nodes:
+        name = node.metadata.get("file_name", "")
+        node.metadata["chunk_index"] = counters.get(name, 0)
+        counters[name] = node.metadata["chunk_index"] + 1
+        node.excluded_embed_metadata_keys = list(node.excluded_embed_metadata_keys) + ["chunk_index"]
+        node.excluded_llm_metadata_keys = list(node.excluded_llm_metadata_keys) + ["chunk_index"]
 
 
 def build_index(nodes):
